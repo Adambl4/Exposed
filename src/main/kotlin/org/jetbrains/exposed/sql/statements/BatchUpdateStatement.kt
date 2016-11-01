@@ -17,7 +17,7 @@ class BatchUpdateStatement(val table: IdTable<*>): UpdateStatement(table, null) 
     override val firstDataSet: List<Pair<Column<*>, Any?>> get() = data.first().second.toList()
 
     fun addBatch(id: EntityID<*>) {
-        if (data.size < 2 || data.first().second.keys.toList().equals(data.last().second.keys.toList())) {
+        if (data.size < 2 || data.first().second.keys.toList() == data.last().second.keys.toList()) {
             data.add(id to TreeMap())
         } else {
             val different = data.first().second.keys.intersect(data.last().second.keys)
@@ -25,13 +25,13 @@ class BatchUpdateStatement(val table: IdTable<*>): UpdateStatement(table, null) 
         }
     }
 
-    override fun <T, S : T> update(column: Column<T>, value: Expression<S>) = error("Expressions unsupported in batch update")
+    override fun <S> update(column: Column<S>, value: Expression<S>) = error("Expressions unsupported in batch update")
 
     override fun prepareSQL(transaction: Transaction): String {
         return super.prepareSQL(transaction) + " WHERE ${transaction.identity(table.id)} = ?"
     }
 
-    override fun PreparedStatement.executeInternal(transaction: Transaction): Int = executeBatch().sum()
+    override fun PreparedStatement.executeInternal(transaction: Transaction): Int = if (data.size == 1) executeUpdate() else executeBatch().sum()
 
     override fun arguments(): Iterable<Iterable<Pair<ColumnType, Any?>>> = data.map { it.second.map { it.key.columnType to it.value } + (table.id.columnType to it.first) }
 }

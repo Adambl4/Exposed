@@ -6,7 +6,12 @@ import org.jetbrains.exposed.sql.Transaction
 import java.sql.PreparedStatement
 import java.util.*
 
-abstract class Statement<T>(val type: StatementType, val targets: List<Table>) {
+
+internal object DefaultValueMarker {
+    override fun toString(): String = "DEFAULT"
+}
+
+abstract class Statement<out T>(val type: StatementType, val targets: List<Table>) {
 
     abstract fun PreparedStatement.executeInternal(transaction: Transaction): T?
 
@@ -36,12 +41,18 @@ abstract class Statement<T>(val type: StatementType, val targets: List<Table>) {
             }
 
             val statement = transaction.prepareStatement(prepareSQL(transaction), autoInc?.map { transaction.identity(it)})
-            contexts.forEach { context ->
+            contexts.forEachIndexed { i, context ->
                 statement.fillParameters(context.args)
-                statement.addBatch()
+                if(contexts.size > 1) statement.addBatch()
             }
-
+            transaction.lastExecutedStatement?.run {
+                if (!isClosed && !transaction.db.supportsMultipleOpenResults) close()
+            }
+            transaction.currentStatement = statement
             val result = statement.executeInternal(transaction)
+            transaction.currentStatement = null
+            transaction.lastExecutedStatement = statement
+
             transaction.monitor.notifyAfterExecution(transaction, contexts, statement)
             return result to contexts
         } finally {
@@ -91,6 +102,15 @@ fun StatementContext.expandArgs(transaction: Transaction) : String {
         if (lastPos < sql.length)
             append(sql.substring(lastPos))
     }
+}
+
+fun PreparedStatement.fillParameters(args: Iterable<Pair<ColumnType, Any?>>): Int {
+    args.forEachIndexed {index, pair ->
+        val (c, v) = pair
+        c.setParameter(this, index + 1, c.valueToDB(v))
+    }
+
+    return args.count() + 1
 }
 
 enum class StatementGroup {

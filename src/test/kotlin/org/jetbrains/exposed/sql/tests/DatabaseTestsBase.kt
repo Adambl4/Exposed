@@ -18,6 +18,7 @@ import kotlin.concurrent.thread
 
 enum class TestDB(val dialect: DatabaseDialect, val connection: String, val driver: String, val beforeConnection: () -> Any, val afterConnection: () -> Unit) {
     H2(H2Dialect, "jdbc:h2:mem:", "org.h2.Driver", {Unit}, {}),
+    SQLITE(SQLiteDialect, "jdbc:sqlite:file:test?mode=memory&cache=shared", "org.sqlite.JDBC", {Unit}, {}),
     MYSQL(MysqlDialect, "jdbc:mysql:mxj://localhost:12345/testdb1?createDatabaseIfNotExist=true&server.initialize-user=false&user=root&password=", "com.mysql.jdbc.Driver",
             beforeConnection = { System.setProperty(Files.USE_TEST_DIR, java.lang.Boolean.TRUE!!.toString()); Files().cleanTestDir(); Unit },
             afterConnection = {
@@ -67,14 +68,14 @@ abstract class DatabaseTestsBase() {
             registeredOnShutdown += dbSettings
         }
 
-        Database.connect(dbSettings.connection, user = "root", driver = dbSettings.driver)
+        val database = Database.connect(dbSettings.connection, user = "root", driver = dbSettings.driver)
 
-        transaction {
+        transaction(database.metadata.defaultTransactionIsolation, 1) {
             statement()
         }
     }
 
-    fun withDB(statement: Transaction.() -> Unit) {
+    fun withDb(statement: Transaction.() -> Unit) {
         TestDB.enabledInTests().forEach {
             withDb(it, statement)
         }
@@ -93,8 +94,9 @@ abstract class DatabaseTestsBase() {
             }
         }
     }
-    fun withTables (vararg tables: Table, statement: Transaction.() -> Unit)
-            = withTables(excludeSettings = emptyList(), tables = *tables, statement = statement)
 
-    fun Transaction.assertEquals(a: Any?, b: Any?) = kotlin.test.assertEquals(a, b, "Failed on ${currentDialect.name}")
+    fun withTables (vararg tables: Table, statement: Transaction.() -> Unit) = withTables(excludeSettings = emptyList(), tables = *tables, statement = statement)
+
+    fun <T>Transaction.assertEquals(a: T, b: T) = kotlin.test.assertEquals(a, b, "Failed on ${currentDialect.name}")
+    fun <T>Transaction.assertEquals(a: T, b: List<T>) = kotlin.test.assertEquals(a, b.single(), "Failed on ${currentDialect.name}")
 }

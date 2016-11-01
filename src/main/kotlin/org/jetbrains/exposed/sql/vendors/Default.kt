@@ -2,10 +2,42 @@ package org.jetbrains.exposed.sql.vendors
 
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.TransactionManager
+import java.sql.ResultSet
 import java.util.*
+
+open class DataTypeProvider() {
+    open fun shortAutoincType() = "INT AUTO_INCREMENT"
+
+    open fun longAutoincType() = "BIGINT AUTO_INCREMENT"
+
+    open fun uuidType() = "BINARY(16)"
+
+    open fun dateTimeType() = "DATETIME"
+
+    open fun blobType(): String = "BLOB"
+
+    open fun binaryType(length: Int): String = "VARBINARY($length)"
+
+    open fun booleanToStatementString(bool: Boolean) = bool.toString()
+
+    open val blobAsStream = false
+}
+
+open class FunctionProvider() {
+
+    open val substring = "SUBSTRING"
+
+    open fun<T:String?> ExpressionWithColumnType<T>.match(pattern: String, mode: MatchMode? = null): Op<Boolean> = with(SqlExpressionBuilder) { this@match.like(pattern) }
+
+    interface MatchMode {
+        fun mode() : String
+    }
+}
 
 interface DatabaseDialect {
     val name: String
+    val dataTypeProvider: DataTypeProvider
+    val functionProvider: FunctionProvider
 
     fun getDatabase(): String
 
@@ -13,7 +45,7 @@ interface DatabaseDialect {
     /**
      * returns list of pairs (column name + nullable) for every table
      */
-    fun tableColumns(): Map<String, List<Pair<String, Boolean>>> = emptyMap()
+    fun tableColumns(vararg tables: Table): Map<Table, List<Pair<String, Boolean>>> = emptyMap()
 
     /**
      * returns map of constraint for a table name/column name pair
@@ -23,20 +55,17 @@ interface DatabaseDialect {
     /**
      * return set of indices for each table
      */
-    fun existingIndices(vararg tables: Table): Map<String, List<Index>> = emptyMap()
+    fun existingIndices(vararg tables: Table): Map<Table, List<Index>> = emptyMap()
 
     fun tableExists(table: Table): Boolean
+
+    fun checkTableMapping(table: Table) = true
 
     fun resetCaches()
 
     fun supportsSelectForUpdate(): Boolean
-
-    fun shortAutoincType(): String
-    fun longAutoincType(): String
-    fun uuidType(): String
-    fun dateTimeType(): String
-    fun blobType(): String
-    fun binaryType(length: Int): String
+    val supportsMultipleGeneratedKeys: Boolean
+    val supportsExpressionsAsDefault: Boolean get() = false
 
     // Specific SQL statements
 
@@ -47,17 +76,12 @@ interface DatabaseDialect {
     fun createIndex(unique: Boolean, tableName: String, indexName: String, columns: List<String>): String
     fun dropIndex(tableName: String, indexName: String): String
 
-    // Specific functions
-    fun<T:String?> ExpressionWithColumnType<T>.match(pattern: String, mode: MatchMode? = null): Op<Boolean> = with(SqlExpressionBuilder) { this@match.like(pattern) }
-
     fun limit(size: Int, offset: Int = 0): String
 }
 
-interface MatchMode {
-    fun mode() : String
-}
-
-internal abstract class VendorDialect(override val name: String) : DatabaseDialect {
+internal abstract class VendorDialect(override val name: String,
+                                      override val dataTypeProvider: DataTypeProvider,
+                                      override val functionProvider: FunctionProvider = FunctionProvider()) : DatabaseDialect {
 
     /* Cached values */
     private var _allTableNames: List<String>? = null
@@ -69,40 +93,53 @@ internal abstract class VendorDialect(override val name: String) : DatabaseDiale
             return _allTableNames!!
         }
 
+    private val isUpperCaseIdentifiers by lazy { TransactionManager.current().db.metadata.storesUpperCaseIdentifiers() }
+    private val isLowerCaseIdentifiers by lazy { TransactionManager.current().db.metadata.storesLowerCaseIdentifiers() }
+    val String.inProperCase: String get() = when {
+        isUpperCaseIdentifiers -> toUpperCase()
+        isLowerCaseIdentifiers -> toLowerCase()
+        else -> this
+    }
+
     /* Method always re-read data from DB. Using allTablesNames field is preferred way */
     override fun allTablesNames(): List<String> {
         val result = ArrayList<String>()
         val resultSet = TransactionManager.current().db.metadata.getTables(null, null, null, arrayOf("TABLE"))
 
         while (resultSet.next()) {
-            result.add(resultSet.getString("TABLE_NAME"))
+            result.add(resultSet.getString("TABLE_NAME").inProperCase)
         }
         return result
     }
 
-    override fun getDatabase() = TransactionManager.current().connection.catalog
+    override fun getDatabase(): String = TransactionManager.current().connection.catalog
 
-    override fun tableExists(table: Table) = allTablesNames.any { it.equals(table.tableName, true) }
+    override fun tableExists(table: Table) = allTablesNames.any { it == table.nameInDatabaseCase() }
 
-    override fun tableColumns(): Map<String, List<Pair<String, Boolean>>> {
-        val tables = HashMap<String, List<Pair<String, Boolean>>>()
+    protected fun ResultSet.extractColumns(tables: Array<out Table>, extract: (ResultSet) -> Triple<String, String, Boolean>): Map<Table, List<Pair<String, Boolean>>> {
+        val mapping = tables.associateBy { it.nameInDatabaseCase() }
+        val result = HashMap<Table, MutableList<Pair<String, Boolean>>>()
 
-        val rs = TransactionManager.current().db.metadata.getColumns(getDatabase(), null, null, null)
-
-        while (rs.next()) {
-            val tableName = rs.getString("TABLE_NAME")!!
-            val columnName = rs.getString("COLUMN_NAME")!!
-            val nullable = rs.getBoolean("NULLABLE")
-            tables[tableName] = (tables[tableName]?.plus(listOf(columnName to nullable)) ?: listOf(columnName to nullable))
+        while (next()) {
+            val (tableName, columnName, nullable) = extract(this)
+            mapping[tableName]?.let { t ->
+                result.getOrPut(t) { arrayListOf() } += columnName to nullable
+            }
         }
-        return tables
+        return result
+    }
+    override fun tableColumns(vararg tables: Table): Map<Table, List<Pair<String, Boolean>>> {
+        val rs = TransactionManager.current().db.metadata.getColumns(getDatabase(), null, null, null)
+        return rs.extractColumns(tables) {
+            Triple(it.getString("TABLE_NAME"), it.getString("COLUMN_NAME")!!, it.getBoolean("NULLABLE"))
+        }
     }
 
     private val columnConstraintsCache = HashMap<String, List<ForeignKeyConstraint>>()
 
     override @Synchronized fun columnConstraints(vararg tables: Table): Map<Pair<String, String>, List<ForeignKeyConstraint>> {
         val constraints = HashMap<Pair<String, String>, MutableList<ForeignKeyConstraint>>()
-        for (table in tables.map{it.tableName}) {
+        for (table in tables.map{ it.nameInDatabaseCase() }) {
             columnConstraintsCache.getOrPut(table, {
                 val rs = TransactionManager.current().db.metadata.getExportedKeys(getDatabase(), null, table)
                 val tableConstraint = arrayListOf<ForeignKeyConstraint> ()
@@ -124,12 +161,22 @@ internal abstract class VendorDialect(override val name: String) : DatabaseDiale
         return constraints
     }
 
-    private val existingIndicesCache = HashMap<String, List<Index>>()
+    private val existingIndicesCache = HashMap<Table, List<Index>>()
 
-    override @Synchronized fun existingIndices(vararg tables: Table): Map<String, List<Index>> {
-        for(table in tables.map {it.tableName}) {
+    override @Synchronized fun existingIndices(vararg tables: Table): Map<Table, List<Index>> {
+        for(table in tables) {
+            val tableName = table.nameInDatabaseCase()
+            val metadata = TransactionManager.current().db.metadata
+
             existingIndicesCache.getOrPut(table, {
-                val rs = TransactionManager.current().db.metadata.getIndexInfo(getDatabase(), null, table, false, false)
+                val pkNames = metadata.getPrimaryKeys(getDatabase(), null, tableName).let { rs ->
+                    val names = arrayListOf<String>()
+                    while(rs.next()) {
+                        rs.getString("PK_NAME")?.let { names += it }
+                    }
+                    names
+                }
+                val rs = metadata.getIndexInfo(getDatabase(), null, tableName, false, false)
 
                 val tmpIndices = hashMapOf<Pair<String, Boolean>, MutableList<String>>()
 
@@ -139,9 +186,8 @@ internal abstract class VendorDialect(override val name: String) : DatabaseDiale
                     val isUnique = !rs.getBoolean("NON_UNIQUE")
                     tmpIndices.getOrPut(indexName to isUnique, { arrayListOf() }).add(column)
                 }
-                tmpIndices.filterNot { it.key.first == "PRIMARY" }.map { Index(it.key.first, table, it.value, it.key.second)}
-            }
-            )
+                tmpIndices.filterNot { it.key.first in pkNames }.map { Index(it.key.first, tableName, it.value, it.key.second)}
+            })
         }
         return HashMap(existingIndicesCache)
     }
@@ -161,7 +207,7 @@ internal abstract class VendorDialect(override val name: String) : DatabaseDiale
             throw UnsupportedOperationException("There's no generic SQL for INSERT IGNORE. There must be vendor specific implementation")
         }
 
-        return "INSERT INTO ${transaction.identity(table)} (${columns.map { transaction.identity(it) }.joinToString()}) $expr"
+        return "INSERT INTO ${transaction.identity(table)} (${columns.joinToString { transaction.identity(it).inProperCase }}) $expr"
     }
 
     override fun delete(ignore: Boolean, table: Table, where: String?, transaction: Transaction): String {
@@ -180,34 +226,35 @@ internal abstract class VendorDialect(override val name: String) : DatabaseDiale
     }
 
     override fun createIndex(unique: Boolean, tableName: String, indexName: String, columns: List<String>): String {
+        val t = TransactionManager.current()
         return buildString {
             append("CREATE ")
             if (unique) append("UNIQUE ")
-            append("INDEX $indexName ON $tableName ")
-            columns.joinTo(this, ", ", "(", ")")
+            append("INDEX ${t.quoteIfNecessary(indexName)} ON ${t.quoteIfNecessary(tableName)} ")
+            columns.joinTo(this, ", ", "(", ")") {
+                t.quoteIfNecessary(it)
+            }
         }
-
     }
 
     override fun dropIndex(tableName: String, indexName: String): String {
-        return "ALTER TABLE $tableName DROP CONSTRAINT $indexName"
+        val t = TransactionManager.current()
+        return "ALTER TABLE ${t.quoteIfNecessary(tableName)} DROP CONSTRAINT ${t.quoteIfNecessary(indexName)}"
     }
 
-    override fun supportsSelectForUpdate() = true
+    private val supportsSelectForUpdate by lazy { TransactionManager.current().db.metadata.supportsSelectForUpdate() }
+    override fun supportsSelectForUpdate() = supportsSelectForUpdate
 
-    override fun shortAutoincType() = "INT AUTO_INCREMENT"
-
-    override fun longAutoincType() = "BIGINT AUTO_INCREMENT"
-
-    override fun uuidType() = "BINARY(16)"
-
-    override fun dateTimeType() = "DATETIME"
-
-    override fun blobType(): String = "BLOB"
-
-    override fun binaryType(length: Int): String = "VARBINARY($length)"
+    override val supportsMultipleGeneratedKeys: Boolean = true
 
     override fun limit(size: Int, offset: Int) = "LIMIT $size" + if (offset > 0) " OFFSET $offset" else ""
+
 }
 
 internal val currentDialect: DatabaseDialect get() = TransactionManager.current().db.dialect
+
+internal fun String.inProperCase(): String = TransactionManager.currentOrNull()?.let { tm ->
+    (currentDialect as? VendorDialect)?.run {
+        this@inProperCase.inProperCase
+    }
+} ?: this

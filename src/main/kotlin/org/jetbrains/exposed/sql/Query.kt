@@ -1,6 +1,5 @@
 package org.jetbrains.exposed.sql
 
-import org.jetbrains.exposed.dao.EntityCache
 import org.jetbrains.exposed.dao.IdTable
 import org.jetbrains.exposed.sql.statements.Statement
 import org.jetbrains.exposed.sql.statements.StatementType
@@ -21,7 +20,14 @@ class ResultRow(size: Int, private val fieldIndex: Map<Expression<*>, Int>) {
 
         return d?.let {
             if (d == NotInitializedValue) error("${c.toSQL(QueryBuilder(false))} is not initialized yet")
-            (c as? ExpressionWithColumnType<T>)?.columnType?.valueFromDB(it) ?: it
+            (c as? ExpressionWithColumnType<T>)?.columnType?.valueFromDB(it) ?: it ?: run {
+                val column = c as? Column<T>
+                if (column?.dbDefaultValue != null && column?.columnType?.nullable == false) {
+                    exposedLogger.warn("Column ${TransactionManager.current().identity(column!!)} is marked as not null, " +
+                            "has default db value, but returns null. Possible have to re-read it from DB.")
+                }
+                null
+            }
         } as T
     }
 
@@ -70,14 +76,16 @@ class ResultRow(size: Int, private val fieldIndex: Map<Expression<*>, Int>) {
 }
 
 open class Query(val transaction: Transaction, val set: FieldSet, val where: Op<Boolean>?): SizedIterable<ResultRow>, Statement<ResultSet>(StatementType.SELECT, set.source.targetTables()) {
-    val groupedByColumns = ArrayList<Expression<*>>();
-    val orderByColumns = ArrayList<Pair<Expression<*>, Boolean>>();
-    var having: Op<Boolean>? = null;
-    var limit: Int? = null
-    var offset: Int = 0
-    var count: Boolean = false
-    var forUpdate: Boolean? = null
+    private val groupedByColumns = ArrayList<Expression<*>>()
+    private val orderByColumns = ArrayList<Pair<Expression<*>, Boolean>>();
+    private var having: Op<Boolean>? = null;
+    private var limit: Int? = null
+    private var offset: Int = 0
+    private var distinct: Boolean = false
+    private var count: Boolean = false
+    private var forUpdate: Boolean? = null
 
+    fun hasCustomForUpdateState() = forUpdate != null
     fun isForUpdate() = (forUpdate ?: transaction.selectsForUpdate) && transaction.db.dialect.supportsSelectForUpdate()
 
     override fun PreparedStatement.executeInternal(transaction: Transaction): ResultSet? = executeQuery()
@@ -96,6 +104,9 @@ open class Query(val transaction: Transaction, val set: FieldSet, val where: Op<
             append("COUNT(*)")
         }
         else {
+            if (distinct) {
+                append("DISTINCT ")
+            }
             val tables = set.source.columns.map { it.table }.toSet()
             val fields = LinkedHashSet(set.fields)
             val completeTables = ArrayList<Table>()
@@ -122,7 +133,9 @@ open class Query(val transaction: Transaction, val set: FieldSet, val where: Op<
 
             if (orderByColumns.isNotEmpty()) {
                 append(" ORDER BY ")
-                append((orderByColumns.map { "${it.first.toSQL(builder)} ${if(it.second) "ASC" else "DESC"}" }).joinToString())
+                append(orderByColumns.joinToString {
+                    "${(it.first as? ExpressionAlias<*>)?.alias ?: it.first.toSQL(builder)} ${if(it.second) "ASC" else "DESC"}"
+                })
             }
 
             limit?.let {
@@ -143,6 +156,11 @@ open class Query(val transaction: Transaction, val set: FieldSet, val where: Op<
 
     override fun notForUpdate(): Query {
         forUpdate = false
+        return this
+    }
+
+    fun withDistinct() : Query {
+        distinct = true
         return this
     }
 
@@ -200,6 +218,7 @@ open class Query(val transaction: Transaction, val set: FieldSet, val where: Op<
 
         override fun hasNext(): Boolean {
             if (hasNext == null) hasNext = rs.next()
+            if (hasNext == false) rs.close()
             return hasNext!!
         }
     }
@@ -207,7 +226,7 @@ open class Query(val transaction: Transaction, val set: FieldSet, val where: Op<
     private fun flushEntities() {
         // Flush data before executing query or results may be unpredictable
         val tables = set.source.columns.map { it.table }.filterIsInstance(IdTable::class.java).toSet()
-        EntityCache.getOrCreate(transaction).flush(tables)
+        transaction.entityCache.flush(tables)
     }
 
     operator override fun iterator(): Iterator<ResultRow> {
@@ -217,6 +236,10 @@ open class Query(val transaction: Transaction, val set: FieldSet, val where: Op<
 
     override fun count(): Int {
         flushEntities()
+
+        if (distinct) {
+            return this.alias("subq").selectAll().count()
+        }
 
         return try {
             count = true

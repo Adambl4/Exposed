@@ -11,13 +11,9 @@ abstract class Op<T>() : Expression<T>() {
     }
 }
 
-infix fun Op<Boolean>.and(op: Expression<Boolean>): Op<Boolean> {
-    return AndOp(this, op)
-}
+infix fun Op<Boolean>.and(op: Expression<Boolean>): Op<Boolean> = AndOp(this, op)
 
-infix fun Op<Boolean>.or(op: Expression<Boolean>): Op<Boolean> {
-    return OrOp(this, op)
-}
+infix fun Op<Boolean>.or(op: Expression<Boolean>): Op<Boolean> = OrOp(this, op)
 
 class IsNullOp(val expr: Expression<*>): Op<Boolean>() {
     override fun toSQL(queryBuilder: QueryBuilder):String {
@@ -51,55 +47,48 @@ class NoOpConversion<T, S>(val expr: Expression<T>, override val columnType: Col
 
 class InListOrNotInListOp<T>(val expr: ExpressionWithColumnType<T>, val list: List<T>, val isInList: Boolean = true): Op<Boolean>() {
 
-    override fun toSQL(queryBuilder: QueryBuilder): String {
-        val sb = StringBuilder()
-
+    override fun toSQL(queryBuilder: QueryBuilder): String = buildString{
         when (list.size) {
-            0 -> when {
-                isInList ->  sb.append(" FALSE")
-                else -> sb.append(" TRUE")
-            }
+            0 -> append(booleanLiteral(!isInList).toSQL(queryBuilder))
 
             1 -> {
-                sb.append(expr.toSQL(queryBuilder))
+                append(expr.toSQL(queryBuilder))
                 when {
-                    isInList ->  sb.append(" = ")
-                    else -> sb.append(" != ")
+                    isInList ->  append(" = ")
+                    else -> append(" != ")
                 }
-                sb.append(queryBuilder.registerArgument(list.first(), expr.columnType))
+                append(queryBuilder.registerArgument(expr.columnType, list.first()))
             }
 
             else -> {
-                sb.append(expr.toSQL(queryBuilder))
+                append(expr.toSQL(queryBuilder))
                 when {
-                    isInList -> sb.append(" IN (")
-                    else -> sb.append(" NOT IN (")
+                    isInList -> append(" IN (")
+                    else -> append(" NOT IN (")
                 }
 
-                list.map {
-                    queryBuilder.registerArgument(it, expr.columnType)
-                }.joinTo(sb)
+                queryBuilder.registerArguments(expr.columnType, list).joinTo(this)
 
-                sb.append(")")
+                append(")")
             }
         }
-
-        return sb.toString()
     }
 }
 
 class QueryParameter<T>(val value: T, val sqlType: ColumnType) : Expression<T>() {
     override fun toSQL(queryBuilder: QueryBuilder): String {
-        return queryBuilder.registerArgument(value, sqlType)
+        return queryBuilder.registerArgument(sqlType, value)
     }
 }
 
 fun <T:Any> idParam(value: EntityID<T>, column: Column<EntityID<T>>): Expression<EntityID<T>> = QueryParameter(value, EntityIDColumnType(column))
+fun booleanParam(value: Boolean): Expression<Boolean> = QueryParameter(value, BooleanColumnType())
 fun intParam(value: Int): Expression<Int> = QueryParameter(value, IntegerColumnType())
 fun longParam(value: Long): Expression<Long> = QueryParameter(value, LongColumnType())
 fun stringParam(value: String): Expression<String> = QueryParameter(value, StringColumnType())
 fun dateParam(value: DateTime): Expression<DateTime> = QueryParameter(value, DateColumnType(false))
 
+fun booleanLiteral(value: Boolean) : LiteralOp<Boolean> = LiteralOp (BooleanColumnType(), value)
 fun intLiteral(value: Int) : LiteralOp<Int> = LiteralOp (IntegerColumnType(), value)
 fun longLiteral(value: Long) : LiteralOp<Long> = LiteralOp(LongColumnType(), value)
 fun stringLiteral(value: String) : LiteralOp<String> = LiteralOp(StringColumnType(), value)
@@ -191,9 +180,5 @@ class TimesOp<T, S: T>(val expr1: Expression<T>, val expr2: Expression<S>, overr
 class DivideOp<T, S: T>(val expr1: Expression<T>, val expr2: Expression<S>, override val columnType: ColumnType): ExpressionWithColumnType<T>() {
     override fun toSQL(queryBuilder: QueryBuilder):String {
         return "(${expr1.toSQL(queryBuilder)}) / (${expr2.toSQL(queryBuilder)})"
-    }
-
-    override fun toString(): String {
-        error("!")
     }
 }

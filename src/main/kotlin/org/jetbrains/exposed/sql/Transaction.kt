@@ -6,14 +6,15 @@ import org.jetbrains.exposed.sql.statements.Statement
 import org.jetbrains.exposed.sql.statements.StatementMonitor
 import org.jetbrains.exposed.sql.statements.StatementType
 import org.jetbrains.exposed.sql.transactions.TransactionInterface
+import org.jetbrains.exposed.sql.vendors.inProperCase
 import java.sql.PreparedStatement
 import java.sql.ResultSet
-import java.util.*
+import java.util.concurrent.ConcurrentHashMap
 
 class Key<T>()
 @Suppress("UNCHECKED_CAST")
 open class UserDataHolder() {
-    private val userdata = HashMap<Key<*>, Any?>()
+    protected val userdata = ConcurrentHashMap<Key<*>, Any?>()
 
     fun <T:Any> putUserData(key: Key<T>, value: T?) {
         userdata[key] = value
@@ -24,21 +25,11 @@ open class UserDataHolder() {
     }
 
     fun <T:Any> getOrCreate(key: Key<T>, init: ()->T): T {
-        if (userdata.containsKey(key)) {
-            return userdata[key] as T
-        }
-
-        val new = init()
-        userdata[key] = new
-        return new
+        return userdata.getOrPut(key, init) as T
     }
 }
 
 open class Transaction(private val transactionImpl: TransactionInterface): UserDataHolder(), TransactionInterface by transactionImpl {
-
-    val identityQuoteString by lazy(LazyThreadSafetyMode.NONE) { db.metadata.identifierQuoteString!! }
-    val extraNameCharacters by lazy(LazyThreadSafetyMode.NONE) { db.metadata.extraNameCharacters!!}
-    val keywords by lazy(LazyThreadSafetyMode.NONE) { db.metadata.sqlKeywords.split(',') }
 
     val monitor = StatementMonitor()
 
@@ -49,6 +40,12 @@ open class Transaction(private val transactionImpl: TransactionInterface): UserD
     var warnLongQueriesDuration: Long = 2000
     var debug = false
     var selectsForUpdate = false
+    val entityCache = EntityCache()
+
+    // currently executing statement. Used to log error properly
+    var currentStatement: PreparedStatement? = null
+    internal var lastExecutedStatement: PreparedStatement? = null
+
 
     val statements = StringBuilder()
     // prepare statement as key and count to execution time as value
@@ -58,16 +55,15 @@ open class Transaction(private val transactionImpl: TransactionInterface): UserD
         logger.addLogger(Slf4jSqlLogger())
     }
 
-
-
     override fun commit() {
         val created = flushCache()
         transactionImpl.commit()
+        userdata.clear()
         EntityCache.invalidateGlobalCaches(created)
     }
 
     fun flushCache(): List<Entity<*>> {
-        with(EntityCache.getOrCreate(this)) {
+        with(entityCache) {
             val newEntities = inserts.flatMap { it.value }
             flush()
             return newEntities
@@ -126,33 +122,28 @@ open class Transaction(private val transactionImpl: TransactionInterface): UserD
         return answer.first?.let { stmt.body(it) }
     }
 
-
-
-    private fun String.isIdentifier() = !isEmpty() && first().isIdentifierStart() && all { it.isIdentifierStart() || it in '0'..'9' }
-    private fun Char.isIdentifierStart(): Boolean = this in 'a'..'z' || this in 'A'..'Z' || this == '_' || this in extraNameCharacters
-
-    private fun needQuotes (identity: String) : Boolean {
-        return keywords.any { identity.equals(it, true) } || !identity.isIdentifier()
-    }
-
     internal fun quoteIfNecessary (identity: String) : String {
-        return (identity.split('.').map {quoteTokenIfNecessary(it)}).joinToString(".")
+        if (identity.contains('.'))
+            return identity.split('.').joinToString(".") {quoteTokenIfNecessary(it)}
+        else {
+            return quoteTokenIfNecessary(identity)
+        }
     }
 
     private fun quoteTokenIfNecessary(token: String) : String {
-        return if (needQuotes(token)) "$identityQuoteString$token$identityQuoteString" else token
+        return if (db.needQuotes(token)) "${db.identityQuoteString}$token${db.identityQuoteString}" else token
     }
 
     fun identity(table: Table): String {
-        return (table as? Alias<*>)?.let { "${identity(it.delegate)} AS ${quoteIfNecessary(it.alias)}"} ?: quoteIfNecessary(table.tableName)
+        return (table as? Alias<*>)?.let { "${identity(it.delegate)} AS ${quoteIfNecessary(it.alias)}"} ?: quoteIfNecessary(table.tableName.inProperCase())
     }
 
     fun fullIdentity(column: Column<*>): String {
-        return "${quoteIfNecessary(column.table.tableName)}.${quoteIfNecessary(column.name)}"
+        return "${quoteIfNecessary(column.table.tableName.inProperCase())}.${quoteIfNecessary(column.name.inProperCase())}"
     }
 
     fun identity(column: Column<*>): String {
-        return quoteIfNecessary(column.name)
+        return quoteIfNecessary(column.name.inProperCase())
     }
 
     fun prepareStatement(sql: String, autoincs: List<String>? = null): PreparedStatement {

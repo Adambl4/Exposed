@@ -1,21 +1,17 @@
 package org.jetbrains.exposed.sql
 
+import org.jetbrains.exposed.dao.EntityID
+import org.jetbrains.exposed.dao.IdTable
 import org.jetbrains.exposed.sql.statements.*
 import org.jetbrains.exposed.sql.transactions.TransactionManager
 import org.jetbrains.exposed.sql.vendors.currentDialect
 import java.util.*
 
-inline fun FieldSet.select(where: SqlExpressionBuilder.()->Op<Boolean>) : Query {
-    return select(SqlExpressionBuilder.where())
-}
+inline fun FieldSet.select(where: SqlExpressionBuilder.()->Op<Boolean>) : Query = select(SqlExpressionBuilder.where())
 
-fun FieldSet.select(where: Op<Boolean>) : Query {
-    return Query(TransactionManager.current(), this, where)
-}
+fun FieldSet.select(where: Op<Boolean>) : Query = Query(TransactionManager.current(), this, where)
 
-fun FieldSet.selectAll() : Query {
-    return Query(TransactionManager.current(), this, null)
-}
+fun FieldSet.selectAll() : Query = Query(TransactionManager.current(), this, null)
 
 fun Table.deleteWhere(op: SqlExpressionBuilder.()->Op<Boolean>) =
     DeleteStatement.where(TransactionManager.current(), this@deleteWhere, SqlExpressionBuilder.op())
@@ -26,12 +22,19 @@ fun Table.deleteIgnoreWhere(op: SqlExpressionBuilder.()->Op<Boolean>) =
 fun Table.deleteAll() =
     DeleteStatement.all(TransactionManager.current(), this@deleteAll)
 
-fun <T:Table> T.insert(body: T.(InsertStatement)->Unit): InsertStatement = InsertStatement(this).apply {
+fun <T:Table> T.insert(body: T.(InsertStatement<Number>)->Unit): InsertStatement <Number> = InsertStatement<Number>(this).apply {
     body(this)
     execute(TransactionManager.current())
 }
 
-fun <T:Table, E:Any> T.batchInsert(data: Iterable<E>, ignore: Boolean = false, body: BatchInsertStatement.(E)->Unit): List<Any> {
+
+fun <Key:Any, T: IdTable<Key>> T.insertAndGetId(body: T.(InsertStatement<EntityID<Key>>)->Unit) = InsertStatement<EntityID<Key>>(this).run {
+    body(this)
+    execute(TransactionManager.current())
+    generatedKey
+}
+
+fun <T:Table, E:Any> T.batchInsert(data: Iterable<E>, ignore: Boolean = false, body: BatchInsertStatement.(E)->Unit): List<Map<Column<*>, Any>> {
     if (data.count() == 0) return emptyList()
     BatchInsertStatement(this, ignore).let {
         for (element in data) {
@@ -42,18 +45,20 @@ fun <T:Table, E:Any> T.batchInsert(data: Iterable<E>, ignore: Boolean = false, b
     }
 }
 
-fun <T:Table> T.insertIgnore(body: T.(UpdateBuilder<*>)->Unit): InsertStatement {
-    val answer = InsertStatement(this, isIgnore = true)
-    body(answer)
-    answer.execute(TransactionManager.current())
-    return answer
+fun <T:Table> T.insertIgnore(body: T.(UpdateBuilder<*>)->Unit): InsertStatement<Long> = InsertStatement<Long>(this, isIgnore = true).apply {
+    body(this)
+    execute(TransactionManager.current())
 }
 
-fun <T:Table> T.replace(body: T.(UpdateBuilder<*>)->Unit): ReplaceStatement {
-    return ReplaceStatement(this).apply {
-        body(this)
-        execute(TransactionManager.current())
-    }
+fun <Key:Any, T: IdTable<Key>> T.insertIgnoreAndGetId(body: T.(UpdateBuilder<*>)->Unit) = InsertStatement<EntityID<Key>>(this, isIgnore = true).run {
+    body(this)
+    execute(TransactionManager.current())
+    generatedKey
+}
+
+fun <T:Table> T.replace(body: T.(UpdateBuilder<*>)->Unit): ReplaceStatement<Long> = ReplaceStatement<Long>(this).apply {
+    body(this)
+    execute(TransactionManager.current())
 }
 
 fun <T:Table> T.insert(selectQuery: Query) =
@@ -83,7 +88,7 @@ fun Table.exists (): Boolean = currentDialect.tableExists(this)
  */
 fun checkMappingConsistence(vararg tables: Table): List<String> {
     checkExcessiveIndices(*tables)
-    return checkMissingIndices(*tables).map{ it.createStatement() }
+    return checkMissingIndices(*tables).flatMap { it.createStatement() }
 }
 
 fun checkExcessiveIndices(vararg tables: Table) {
@@ -98,7 +103,7 @@ fun checkExcessiveIndices(vararg tables: Table) {
             exposedLogger.warn("\t\t\t'${pair.first}'.'${pair.second}' -> '${constraint.referencedTable}'.'${constraint.referencedColumn}':\t${fk.map{it.fkName}.joinToString(", ")}")
         }
 
-        exposedLogger.info("SQL Queries to remove excessive keys:");
+        exposedLogger.info("SQL Queries to remove excessive keys:")
         excessiveConstraints.forEach {
             it.value.take(it.value.size - 1).forEach {
                 exposedLogger.info("\t\t\t${it.dropStatement()};")
@@ -113,7 +118,7 @@ fun checkExcessiveIndices(vararg tables: Table) {
             val (triple, indices) = it
             exposedLogger.warn("\t\t\t'${triple.first}'.'${triple.third}' -> ${indices.map{it.indexName}.joinToString(", ")}")
         }
-        exposedLogger.info("SQL Queries to remove excessive indices:");
+        exposedLogger.info("SQL Queries to remove excessive indices:")
         excessiveIndices.forEach {
             it.value.take(it.value.size - 1).forEach {
                 exposedLogger.info("\t\t\t${it.dropStatement()};")
@@ -135,14 +140,13 @@ private fun checkMissingIndices(vararg tables: Table): List<Index> {
 
     val fKeyConstraints = currentDialect.columnConstraints(*tables).keys
 
-    fun List<Index>.filterFKeys() = filterNot { it.tableName to it.columns.singleOrNull()?.orEmpty() in fKeyConstraints}
+    fun List<Index>.filterFKeys() = filterNot { it.tableName to it.columns.singleOrNull().orEmpty() in fKeyConstraints}
 
-    val allExistingIndices = currentDialect.existingIndices(*tables)
     val missingIndices = HashSet<Index>()
     val notMappedIndices = HashMap<String, MutableSet<Index>>()
     val nameDiffers = HashSet<Index>()
     for (table in tables) {
-        val existingTableIndices = allExistingIndices[table.tableName].orEmpty().filterFKeys()
+        val existingTableIndices = currentDialect.existingIndices(table)[table].orEmpty().filterFKeys()
         val mappedIndices = table.indices.map { Index.forColumns(*it.first, unique = it.second)}.filterFKeys()
 
         existingTableIndices.forEach { index ->
@@ -153,7 +157,7 @@ private fun checkMissingIndices(vararg tables: Table): List<Index> {
             }
         }
 
-        notMappedIndices.getOrPut(table.javaClass.simpleName, {hashSetOf()}).addAll(existingTableIndices.subtract(mappedIndices))
+        notMappedIndices.getOrPut(table.nameInDatabaseCase(), {hashSetOf()}).addAll(existingTableIndices.subtract(mappedIndices))
 
         missingIndices.addAll(mappedIndices.subtract(existingTableIndices))
     }

@@ -4,22 +4,38 @@ import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.TransactionManager
 import java.util.*
 
-internal object MysqlDialect : VendorDialect("mysql") {
 
-    override @Synchronized fun tableColumns(): Map<String, List<Pair<String, Boolean>>> {
+internal object MysqlDataTypeProvider : DataTypeProvider() {
+    override fun dateTimeType(): String = if (MysqlDialect.isFractionDateTimeSupported()) "DATETIME(6)" else "DATETIME"
+}
 
-        val tables = HashMap<String, List<Pair<String, Boolean>>>()
+internal object MysqlFunctionProvder : FunctionProvider() {
+
+    override fun <T : String?> ExpressionWithColumnType<T>.match(pattern: String, mode: MatchMode?): Op<Boolean> = MATCH(this, pattern, mode ?: MysqlMatchMode.STRICT)
+
+    private class MATCH(val expr: ExpressionWithColumnType<*>, val pattern: String, val mode: MatchMode): Op<Boolean>() {
+        override fun toSQL(queryBuilder: QueryBuilder): String {
+            return "MATCH(${expr.toSQL(queryBuilder)}) AGAINST ('$pattern' ${mode.mode()})"
+        }
+    }
+
+    private enum class MysqlMatchMode(val operator: String): FunctionProvider.MatchMode {
+        STRICT("IN BOOLEAN MODE"),
+        NATURAL_LANGUAGE("IN NATURAL LANGUAGE MODE");
+
+        override fun mode() = operator
+    }
+}
+
+internal object MysqlDialect : VendorDialect("mysql", MysqlDataTypeProvider, MysqlFunctionProvder) {
+
+    override fun tableColumns(vararg tables: Table): Map<Table, List<Pair<String, Boolean>>> {
 
         val rs = TransactionManager.current().connection.createStatement().executeQuery(
                 "SELECT DISTINCT TABLE_NAME, COLUMN_NAME, IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '${getDatabase()}'")
-
-        while (rs.next()) {
-            val tableName = rs.getString("TABLE_NAME")!!
-            val columnName = rs.getString("COLUMN_NAME")!!
-            val nullable = rs.getBoolean("IS_NULLABLE")
-            tables[tableName] = (tables[tableName]?.plus(listOf(columnName to nullable)) ?: listOf(columnName to nullable))
+        return rs.extractColumns(tables) {
+            Triple(it.getString("TABLE_NAME")!!, it.getString("COLUMN_NAME")!!, it.getBoolean("IS_NULLABLE"))
         }
-        return tables
     }
 
     override @Synchronized fun columnConstraints(vararg tables: Table): Map<Pair<String, String>, List<ForeignKeyConstraint>> {
@@ -62,9 +78,11 @@ internal object MysqlDialect : VendorDialect("mysql") {
         return constraints
     }
 
-    override @Synchronized fun existingIndices(vararg tables: Table): Map<String, List<Index>> {
+    override @Synchronized fun existingIndices(vararg tables: Table): Map<Table, List<Index>> {
 
-        val constraints = HashMap<String, MutableList<Index>>()
+        val constraints = HashMap<Table, MutableList<Index>>()
+
+        val tableNames = tables.associateBy { it.nameInDatabaseCase() }
 
         val rs = TransactionManager.current().connection.createStatement().executeQuery(
                 """SELECT ind.* from (
@@ -83,32 +101,21 @@ internal object MysqlDialect : VendorDialect("mysql") {
 
         while (rs.next()) {
             val tableName = rs.getString("TABLE_NAME")!!
-            val indexName = rs.getString("INDEX_NAME")!!
-            val columnsInIndex = rs.getString("COLUMNS")!!.split(',')
-            val isUnique = rs.getInt("NON_UNIQUE") == 0
-            constraints.getOrPut(tableName, { arrayListOf() }).add(Index(indexName, tableName, columnsInIndex, isUnique))
+            if (tableName in tableNames.keys) {
+                val indexName = rs.getString("INDEX_NAME")!!
+                val columnsInIndex = rs.getString("COLUMNS")!!.split(',')
+                val isUnique = rs.getInt("NON_UNIQUE") == 0
+                constraints.getOrPut(tableNames[tableName]!!, { arrayListOf() }).add(Index(indexName, tableName, columnsInIndex, isUnique))
+            }
         }
 
         return constraints
     }
 
-    override fun getDatabase(): String {
-        return TransactionManager.current().connection.catalog
-    }
-
-
-    override fun <T : String?> ExpressionWithColumnType<T>.match(pattern: String, mode: MatchMode?): Op<Boolean> = MATCH(this, pattern, mode ?: MysqlMatchMode.STRICT)
-
-    private class MATCH(val expr: ExpressionWithColumnType<*>, val pattern: String, val mode: MatchMode): Op<Boolean>() {
-        override fun toSQL(queryBuilder: QueryBuilder): String {
-            return "MATCH(${expr.toSQL(queryBuilder)}) AGAINST ('$pattern' ${mode.mode()})"
-        }
-    }
-
     override fun replace(table: Table, data: List<Pair<Column<*>, Any?>>, transaction: Transaction): String {
         val builder = QueryBuilder(true)
         val columns = data.map { transaction.identity(it.first) }
-        val values = data.map { builder.registerArgument(it.second, it.first.columnType) }
+        val values = data.map { builder.registerArgument(it.first.columnType, it.second) }
         return "REPLACE INTO ${transaction.identity(table)} (${columns.joinToString()}) VALUES (${values.joinToString()})"
     }
 
@@ -127,13 +134,4 @@ internal object MysqlDialect : VendorDialect("mysql") {
     }
 
     fun isFractionDateTimeSupported() = TransactionManager.current().db.metadata.let { (it.databaseMajorVersion == 5 && it.databaseMinorVersion >= 6) ||it.databaseMajorVersion > 5 }
-
-    override fun dateTimeType(): String = if (isFractionDateTimeSupported()) "DATETIME(6)" else "DATETIME"
-}
-
-enum class MysqlMatchMode(val operator: String): MatchMode {
-    STRICT("IN BOOLEAN MODE"),
-    NATURAL_LANGUAGE("IN NATURAL LANGUAGE MODE");
-
-    override fun mode() = operator
 }

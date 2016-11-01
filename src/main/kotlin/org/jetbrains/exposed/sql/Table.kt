@@ -3,6 +3,7 @@ package org.jetbrains.exposed.sql
 import org.jetbrains.exposed.dao.EntityID
 import org.jetbrains.exposed.dao.IdTable
 import org.jetbrains.exposed.sql.transactions.TransactionManager
+import org.jetbrains.exposed.sql.vendors.inProperCase
 import org.joda.time.DateTime
 import java.math.BigDecimal
 import java.sql.Blob
@@ -123,7 +124,9 @@ class Join (val table: ColumnSet) : ColumnSet() {
 }
 
 open class Table(name: String = ""): ColumnSet(), DdlAware {
-    open val tableName = if (name.length > 0) name else this.javaClass.simpleName.removeSuffix("Table")
+    open val tableName = (if (name.isNotEmpty()) name else this.javaClass.simpleName.removeSuffix("Table"))
+
+    fun nameInDatabaseCase() = tableName.inProperCase()
 
     private val _columns = ArrayList<Column<*>>()
     override val columns: List<Column<*>> = _columns
@@ -192,7 +195,7 @@ open class Table(name: String = ""): ColumnSet(), DdlAware {
 
     fun char(name: String): Column<Char> = registerColumn(name, CharacterColumnType())
 
-    fun decimal(name: String, scale: Int, precision: Int): Column<BigDecimal> = registerColumn(name, DecimalColumnType(scale, precision))
+    fun decimal(name: String, precision: Int, scale: Int): Column<BigDecimal> = registerColumn(name, DecimalColumnType(precision, scale))
 
     fun long(name: String): Column<Long> = registerColumn(name, LongColumnType())
 
@@ -254,13 +257,24 @@ open class Table(name: String = ""): ColumnSet(), DdlAware {
     }
 
     fun <T:Any> Column<T>.default(defaultValue: T): Column<T> {
-        this.dbDefaultValue = defaultValue
+        this.dbDefaultValue = object : Expression<T>() {
+            override fun toSQL(queryBuilder: QueryBuilder): String {
+                return columnType.valueToString(defaultValue)
+            }
+        }
         this.defaultValueFun = { defaultValue }
+        return this
+    }
+
+    fun <T:Any> Column<T>.defaultExpression(defaultValue: Expression<T>): Column<T> {
+        this.dbDefaultValue = defaultValue
+        this.defaultValueFun = null
         return this
     }
 
     fun <T:Any> Column<T>.clientDefault(defaultValue: () -> T): Column<T> {
         this.defaultValueFun = defaultValue
+        this.dbDefaultValue = null
         return this
     }
 
@@ -274,32 +288,45 @@ open class Table(name: String = ""): ColumnSet(), DdlAware {
 
     fun<T> Column<T>.uniqueIndex() : Column<T> = index(true)
 
-    val ddl: String
+    val ddl: List<String>
         get() = createStatement()
 
-    override fun createStatement(): String  = buildString {
-        append("CREATE TABLE IF NOT EXISTS ${TransactionManager.current().identity(this@Table)}")
+    override fun createStatement() = listOf(buildString {
+        append("CREATE TABLE IF NOT EXISTS ${TransactionManager.current().identity(this@Table).inProperCase()}")
         if (columns.any()) {
-            append(columns.map { it.descriptionDdl() }.joinToString(prefix = " ("))
-            var pkey = columns.filter { it.indexInPK != null }.sortedBy { it.indexInPK }
-            if (pkey.isEmpty()) {
-                pkey = columns.filter { it.columnType.autoinc }
+            append(columns.joinToString(prefix = " (") { it.descriptionDdl() })
+            if (columns.none { it.isOneColumnPK() }) {
+                primaryKeyConstraint()?.let {
+                    append(", $it")
+                }
             }
-            if (pkey.isNotEmpty()) {
-                append(pkey.joinToString(
-                        prefix = ", CONSTRAINT ${TransactionManager.current().quoteIfNecessary("pk_$tableName")} PRIMARY KEY (", postfix = ")") {
-                    TransactionManager.current().identity(it)
-                })
+            columns.filter { it.referee != null }.let { references ->
+                if (references.isNotEmpty()) {
+                    append(references.joinToString(prefix = ", ", separator = ", ") { ForeignKeyConstraint.from(it).foreignKeyPart })
+                }
             }
+
             append(")")
         }
+    })
+
+    internal fun primaryKeyConstraint(): String? {
+        var pkey = columns.filter { it.indexInPK != null }.sortedBy { it.indexInPK }
+        if (pkey.isEmpty()) {
+            pkey = columns.filter { it.columnType.autoinc }
+        }
+        if (pkey.isNotEmpty()) {
+            return pkey.joinToString(
+                    prefix = "CONSTRAINT ${TransactionManager.current().quoteIfNecessary("pk_$tableName")} PRIMARY KEY (", postfix = ")") {
+                TransactionManager.current().identity(it)
+            }
+        }
+        return null
     }
 
-    override fun dropStatement(): String = "DROP TABLE ${TransactionManager.current().identity(this)}"
+    override fun dropStatement() = listOf("DROP TABLE IF EXISTS ${TransactionManager.current().identity(this)}")
 
-    override fun modifyStatement(): String {
-        throw UnsupportedOperationException("Use modify on columns and indices")
-    }
+    override fun modifyStatement() = throw UnsupportedOperationException("Use modify on columns and indices")
 
     override fun equals(other: Any?): Boolean {
         if (other !is Table) return false

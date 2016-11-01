@@ -1,5 +1,6 @@
 package org.jetbrains.exposed.sql.tests.shared
 
+import org.jetbrains.exposed.dao.IntIdTable
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.tests.DatabaseTestsBase
 import org.jetbrains.exposed.sql.tests.TestDB
@@ -8,6 +9,8 @@ import org.junit.Test
 import java.math.BigDecimal
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 object DMLTestsData {
     object Cities : Table() {
@@ -265,7 +268,7 @@ class DMLTests() : DatabaseTestsBase() {
         withCitiesAndUsers { cities, users, userData ->
             val r = (cities innerJoin users).slice(cities.name, users.id.count(), cities.id.max()).selectAll()
                     .groupBy(cities.name)
-                    .having{users.id.count() eq cities.id.max()}
+                    .having{users.id.count().eq(cities.id.max())}
                     .orderBy(cities.name)
                     .toList()
 
@@ -305,6 +308,61 @@ class DMLTests() : DatabaseTestsBase() {
                 assertEquals("St. Petersburg", r[it][cities.name])
                 val count = r[it][users.id.count()]
                 assertEquals(1, count)
+            }
+        }
+    }
+
+    @Test fun testGroupBy05() {
+        withCitiesAndUsers { cities, users, userData ->
+            val maxNullableCityId = users.cityId.max()
+
+            users.slice(maxNullableCityId).selectAll()
+                    .map { it[maxNullableCityId] }.let { result ->
+                assertTrue(result.size == 1)
+                assertNotNull(result.single())
+            }
+
+            users.slice(maxNullableCityId).select { users.cityId.isNull() }
+                    .map { it[maxNullableCityId] }.let { result ->
+                assertTrue(result.size == 1)
+                assertNull(result.single())
+            }
+        }
+    }
+
+    @Test fun testGroupBy06() {
+        withCitiesAndUsers { cities, users, userData ->
+            val maxNullableId: Max<Int> = cities.id.max()
+
+            cities.slice(maxNullableId).selectAll()
+                    .map { it[maxNullableId] }.let { result ->
+                assertTrue(result.size == 1)
+                assertNotNull(result.single())
+            }
+
+            cities.slice(maxNullableId).select { cities.id.isNull() }
+                    .map { it[maxNullableId] }.let { result: List<Int?> ->
+                assertTrue(result.size == 1)
+                assertNull(result.single())
+            }
+        }
+    }
+
+    @Test fun testGroupBy07() {
+        withCitiesAndUsers { cities, users, userData ->
+            val avgIdExpr = cities.id.avg()
+            val avgId = BigDecimal.valueOf(cities.selectAll().map { it[cities.id]}.average())
+
+            cities.slice(avgIdExpr).selectAll()
+                    .map { it[avgIdExpr] }.let { result ->
+                assertTrue(result.size == 1)
+                assertTrue(result.single()!!.compareTo(avgId) == 0)
+            }
+
+            cities.slice(avgIdExpr).select { cities.id.isNull() }
+                    .map { it[avgIdExpr] }.let { result ->
+                assertTrue(result.size == 1)
+                assertNull(result.single())
             }
         }
     }
@@ -604,6 +662,40 @@ class DMLTests() : DatabaseTestsBase() {
         }
     }
 
+    @Test fun testGeneratedKey01() {
+        withTables(DMLTestsData.Cities){
+            val id = DMLTestsData.Cities.insert {
+                it[DMLTestsData.Cities.name] = "FooCity"
+            } get DMLTestsData.Cities.id
+            assertEquals(DMLTestsData.Cities.selectAll().last()[DMLTestsData.Cities.id], id)
+        }
+    }
+
+    @Test fun testGeneratedKey02() {
+        val LongIdTable = object : Table() {
+            val id = long("id").autoIncrement().primaryKey()
+            val name = text("name")
+        }
+        withTables(LongIdTable){
+            val id = LongIdTable.insert {
+                it[LongIdTable.name] = "Foo"
+            } get LongIdTable.id
+            assertEquals(LongIdTable.selectAll().last()[LongIdTable.id], id)
+        }
+    }
+
+    @Test fun testGeneratedKey03() {
+        val IntIdTable = object : IntIdTable() {
+            val name = text("name")
+        }
+        withTables(IntIdTable){
+            val id = IntIdTable.insertAndGetId {
+                it[IntIdTable.name] = "Foo"
+            }
+            assertEquals(IntIdTable.selectAll().last()[IntIdTable.id], id)
+        }
+    }
+
 /*
     Test fun testInsert05() {
         val stringThatNeedsEscaping = "multi\r\nline"
@@ -621,6 +713,19 @@ class DMLTests() : DatabaseTestsBase() {
         }
     }
 */
+
+    @Test fun testSelectDistinct() {
+        val tbl = DMLTestsData.Cities
+        withTables(tbl) {
+            tbl.insert { it[tbl.name] = "test" }
+            tbl.insert { it[tbl.name] = "test" }
+
+            assertEquals(2, tbl.selectAll().count())
+            assertEquals(2, tbl.selectAll().withDistinct().count())
+            assertEquals(1, tbl.slice(tbl.name).selectAll().withDistinct().count())
+            assertEquals("test", tbl.slice(tbl.name).selectAll().withDistinct().single()[tbl.name])
+        }
+    }
 
     @Test fun testSelect01() {
         val tbl = DMLTestsData.Misc
@@ -810,6 +915,34 @@ class DMLTests() : DatabaseTestsBase() {
             assertNotNull(query.slice(users.columns + innerExp).selectAll().first().get(innerExp))
         }
     }
+
+    @Test fun testDefaultExpressions01() {
+
+        fun abs(value: Int) = object : ExpressionWithColumnType<Int>() {
+            override fun toSQL(queryBuilder: QueryBuilder): String {
+                return "ABS($value)"
+            }
+
+            override val columnType: ColumnType = IntegerColumnType()
+        }
+
+        val foo = object : IntIdTable() {
+            val name = text("name")
+            val defaultDateTime = datetime("defaultDateTime").defaultExpression(CurrentDateTime())
+            val defaultInt = integer("defaultInteger").defaultExpression(abs(-100))
+        }
+
+        withTables(foo) {
+            val id = foo.insertAndGetId {
+                it[foo.name] = "bar"
+            }
+            val result = foo.select { foo.id eq id!! }.single()
+
+            assertEquals(today, result[foo.defaultDateTime].withTimeAtStartOfDay())
+            assertEquals(100, result[foo.defaultInt])
+        }
+    }
+
 }
 
 
@@ -835,4 +968,4 @@ class FooTests {
     }
 }
 
-val today = DateTime.now().withTimeAtStartOfDay()
+val today: DateTime = DateTime.now().withTimeAtStartOfDay()
