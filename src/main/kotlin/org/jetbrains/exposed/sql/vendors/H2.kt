@@ -1,7 +1,5 @@
 package org.jetbrains.exposed.sql.vendors
 
-import org.h2.engine.Session
-import org.h2.jdbc.JdbcConnection
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.TransactionManager
 
@@ -27,7 +25,7 @@ internal object H2Dialect: VendorDialect("h2", H2DataTypeProvider) {
     }
 
     private fun currentMode(): String {
-        return ((TransactionManager.current().connection as? JdbcConnection)?.session as? Session)?.database?.mode?.name ?: ""
+        TODO()
     }
 
     override fun existingIndices(vararg tables: Table): Map<Table, List<Index>> {

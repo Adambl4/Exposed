@@ -51,7 +51,7 @@ open class Column<T>(val table: Table, val name: String, override val columnType
     internal fun isOneColumnPK() = table.columns.filter { it.indexInPK != null }.singleOrNull() == this
 
     fun descriptionDdl(): String = buildString {
-        append(TransactionManager.current().identity(this@Column).inProperCase())
+        append(this@Column.name)
         append(" ")
         val isPKColumn = indexInPK != null
         val colType = columnType

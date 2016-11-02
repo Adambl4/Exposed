@@ -15,7 +15,7 @@ object SchemaUtils {
 
         for (table in EntityCache.sortTablesByReferences(tables.toList())) {
 
-            if (table.exists()) continue else newTables.add(table)
+            newTables.add(table)
 
             // create table
             statements.addAll(table.ddl)

@@ -251,7 +251,7 @@ internal abstract class VendorDialect(override val name: String,
 
 }
 
-internal val currentDialect: DatabaseDialect get() = TransactionManager.current().db.dialect
+internal val currentDialect: DatabaseDialect get() = SQLiteDialect
 
 internal fun String.inProperCase(): String = TransactionManager.currentOrNull()?.let { tm ->
     (currentDialect as? VendorDialect)?.run {

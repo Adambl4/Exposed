@@ -61,11 +61,6 @@ publishing {
             artifact sourcesJar
             artifactId = 'exposed'
         }
-        spring_transaction(MavenPublication) {
-            from findProject(":spring-transaction").components.java
-            artifact sourcesJar
-            artifactId = 'spring-transaction'
-        }
     }
 }
 
@@ -105,26 +100,11 @@ allprojects {
         compile "org.jetbrains.kotlin:kotlin-reflect:$kotlin_version"
         compile 'joda-time:joda-time:2.5'
         compile 'org.slf4j:slf4j-api:1.7.12'
-        compileOnly 'com.h2database:h2:1.4.186'
 
         testCompile "org.jetbrains.kotlin:kotlin-test-junit:$kotlin_version"
         testCompile 'org.slf4j:slf4j-log4j12:1.7.12'
         testCompile 'log4j:log4j:1.2.17'
         testCompile 'junit:junit:4.11'
         testCompile 'com.h2database:h2:1.4.186'
-
-    }
-}
-
-
-project(":spring-transaction") {
-    apply plugin: 'kotlin'
-
-
-    dependencies {
-        compile 'org.springframework:spring-jdbc:4.2.5.RELEASE'
-        compile 'org.springframework:spring-context:4.2.5.RELEASE'
-        compile rootProject
-        testCompile 'org.springframework:spring-test:4.2.5.RELEASE'
     }
 }

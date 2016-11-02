@@ -36,13 +36,12 @@ data class ForeignKeyConstraint(val fkName: String, val refereeTable: String, va
     companion object {
         fun from(column: Column<*>): ForeignKeyConstraint {
             assert(column.referee !== null) { "$column does not reference anything" }
-            val s = TransactionManager.current()
-            return ForeignKeyConstraint("", s.identity(column.referee!!.table).inProperCase(), s.identity(column.referee!!).inProperCase(), s.identity(column.table).inProperCase(), s.identity(column).inProperCase(), column.onDelete)
+            return ForeignKeyConstraint("", column.referee!!.table.tableName, column.referee!!.name, column.table.tableName, column.name, column.onDelete)
         }
     }
 
     internal val foreignKeyPart = buildString {
-        append(" FOREIGN KEY ($referencedColumn) REFERENCES $refereeTable($refereeColumn)")
+        append("FOREIGN KEY ($referencedColumn) REFERENCES $refereeTable($refereeColumn)")
 
         deleteRule?.let { onDelete ->
             append(" ON DELETE $onDelete")

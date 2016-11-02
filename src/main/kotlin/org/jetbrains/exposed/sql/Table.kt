@@ -292,7 +292,7 @@ open class Table(name: String = ""): ColumnSet(), DdlAware {
         get() = createStatement()
 
     override fun createStatement() = listOf(buildString {
-        append("CREATE TABLE IF NOT EXISTS ${TransactionManager.current().identity(this@Table).inProperCase()}")
+        append("CREATE TABLE IF NOT EXISTS $tableName")
         if (columns.any()) {
             append(columns.joinToString(prefix = " (") { it.descriptionDdl() })
             if (columns.none { it.isOneColumnPK() }) {
@@ -311,7 +311,7 @@ open class Table(name: String = ""): ColumnSet(), DdlAware {
     })
 
     internal fun primaryKeyConstraint(): String? {
-        var pkey = columns.filter { it.indexInPK != null }.sortedBy { it.indexInPK }
+       /* var pkey = columns.filter { it.indexInPK != null }.sortedBy { it.indexInPK }
         if (pkey.isEmpty()) {
             pkey = columns.filter { it.columnType.autoinc }
         }
@@ -320,7 +320,9 @@ open class Table(name: String = ""): ColumnSet(), DdlAware {
                     prefix = "CONSTRAINT ${TransactionManager.current().quoteIfNecessary("pk_$tableName")} PRIMARY KEY (", postfix = ")") {
                 TransactionManager.current().identity(it)
             }
-        }
+        }*/
+
+        //TODO
         return null
     }
 

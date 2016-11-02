@@ -2,6 +2,8 @@ package demo.sql
 
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction
+import javax.jws.soap.SOAPBinding
+import javax.xml.validation.Schema
 import kotlin.test.assertEquals
 
 object Users : Table() {
@@ -15,6 +17,11 @@ object Cities : Table() {
     val name = varchar("name", 50) // Column<String>
 }
 
+fun main(args: Array<String>) {
+    val st = SchemaUtils.createStatements (Users)
+    print(st)
+}
+/*
 fun main(args: Array<String>) {
     Database.connect("jdbc:h2:mem:test", driver = "org.h2.Driver")
 
@@ -117,3 +124,4 @@ fun main(args: Array<String>) {
 
     }
 }
+*/
