@@ -8,8 +8,6 @@ import org.joda.time.DateTime
 import java.math.BigDecimal
 import java.sql.Blob
 import java.util.*
-import kotlin.reflect.memberProperties
-import kotlin.reflect.primaryConstructor
 
 interface FieldSet {
     val fields: List<Expression<*>>
@@ -177,16 +175,18 @@ open class Table(name: String = ""): ColumnSet(), DdlAware {
     })
 
     fun <ID:Any> entityId(name: String, table: IdTable<ID>) : Column<EntityID<ID>> {
-        val originalColumn = (table.id.columnType as EntityIDColumnType<*>).idColumn
+        /*val originalColumn = (table.id.columnType as EntityIDColumnType<*>).idColumn
         val copy = originalColumn.columnType.clone().apply { autoinc = false }
         val answer = Column<EntityID<ID>>(this, name, EntityIDColumnType(Column(table, name, copy), false))
         _columns.add(answer)
-        return answer
+        return answer*/
+        TODO()
     }
 
     private fun <T:Any> T.clone() = javaClass.kotlin.run {
-        val allParams = memberProperties.map { it.name to it.get(this@clone) }.toMap()
-        primaryConstructor!!.callBy(primaryConstructor!!.parameters.map { it to allParams[it.name] }.toMap())
+        /*val allParams = memberProperties.map { it.name to it.get(this@clone) }.toMap()
+        primaryConstructor!!.callBy(primaryConstructor!!.parameters.map { it to allParams[it.name] }.toMap())*/
+        //TODO()
     }
 
     fun <T:Enum<T>> enumeration(name: String, klass: Class<T>) : Column<T>  = registerColumn(name, EnumerationColumnType(klass))
