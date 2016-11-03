@@ -315,3 +315,16 @@ class UUIDColumnType() : ColumnType(autoinc = false) {
     }
 
 }
+
+class RealColumnType() : ColumnType() {
+    override fun sqlType(): String  = "REAL"
+
+    override fun valueFromDB(value: Any): Any {
+        TODO()
+        /*return when(value) {
+            is Char -> value
+            is Number -> value.toChar()
+            else -> error("Unexpected value of type Char: $value")
+        }*/
+    }
+}
