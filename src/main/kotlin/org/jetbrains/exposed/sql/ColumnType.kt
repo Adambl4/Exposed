@@ -5,10 +5,6 @@ import org.jetbrains.exposed.dao.IdTable
 import org.jetbrains.exposed.sql.statements.DefaultValueMarker
 import org.jetbrains.exposed.sql.vendors.SQLiteDialect
 import org.jetbrains.exposed.sql.vendors.currentDialect
-import org.joda.time.DateTime
-import org.joda.time.DateTimeZone
-import org.joda.time.format.DateTimeFormat
-import org.joda.time.format.ISODateTimeFormat
 import java.io.InputStream
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -156,14 +152,15 @@ class EnumerationColumnType<T:Enum<T>>(val klass: Class<T>): ColumnType() {
     }
 }
 
-private val DEFAULT_DATE_TIME_STRING_FORMATTER = DateTimeFormat.forPattern("YYYY-MM-dd HH:mm:ss.SSS").withLocale(Locale.ROOT)
-private val SQLITE_DATE_TIME_STRING_FORMATTER = DateTimeFormat.forPattern("YYYY-MM-dd HH:mm:ss")
-private val SQLITE_DATE_STRING_FORMATTER = ISODateTimeFormat.yearMonthDay()
+//private val DEFAULT_DATE_TIME_STRING_FORMATTER = DateTimeFormat.forPattern("YYYY-MM-dd HH:mm:ss.SSS").withLocale(Locale.ROOT)
+//private val SQLITE_DATE_TIME_STRING_FORMATTER = DateTimeFormat.forPattern("YYYY-MM-dd HH:mm:ss")
+//private val SQLITE_DATE_STRING_FORMATTER = ISODateTimeFormat.yearMonthDay()
 class DateColumnType(val time: Boolean): ColumnType() {
-    override fun sqlType(): String  = if (time) currentDialect.dataTypeProvider.dateTimeType() else "DATE"
+    //override fun sqlType(): String  = if (time) currentDialect.dataTypeProvider.dateTimeType() else "DATE"
+    override fun sqlType(): String  = "TEXT"
 
     override fun nonNullValueToString(value: Any): String {
-        if (value is String) return value
+       /* if (value is String) return value
 
         val dateTime = when (value) {
             is DateTime -> value
@@ -178,10 +175,11 @@ class DateColumnType(val time: Boolean): ColumnType() {
         } else {
             val date = Date (dateTime.millis)
             return "'$date'"
-        }
+        }*/
+        TODO()
     }
 
-    override fun valueFromDB(value: Any): Any = when(value) {
+/*    override fun valueFromDB(value: Any): Any = when(value) {
         is java.sql.Date ->  DateTime(value.time)
         is java.sql.Timestamp -> DateTime(value.time)
         is Long -> DateTime(value)
@@ -191,10 +189,14 @@ class DateColumnType(val time: Boolean): ColumnType() {
             else -> value
         }
         else -> value
+    }*/
+
+    override fun valueFromDB(value: Any): Any {
+        TODO()
     }
 
     override fun notNullValueToDB(value: Any): Any {
-        if (value is DateTime) {
+      /*  if (value is DateTime) {
             val millis = value.millis
             if (time) {
                 return java.sql.Timestamp(millis)
@@ -203,7 +205,8 @@ class DateColumnType(val time: Boolean): ColumnType() {
                 return java.sql.Date(millis)
             }
         }
-        return value
+        return value*/
+        TODO()
     }
 }
 

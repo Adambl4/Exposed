@@ -1,5 +1,6 @@
 package demo.sql
 
+import demo.Listings
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction
 import javax.jws.soap.SOAPBinding
@@ -18,7 +19,7 @@ object Cities : Table() {
 }
 
 fun main(args: Array<String>) {
-    val st = SchemaUtils.createStatements (Users)
+    val st = SchemaUtils.createStatements (Listings)
     print(st)
 }
 /*

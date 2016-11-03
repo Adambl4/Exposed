@@ -1,6 +1,5 @@
 package org.jetbrains.exposed.sql
 import org.jetbrains.exposed.sql.vendors.currentDialect
-import org.joda.time.DateTime
 import java.math.BigDecimal
 import java.util.*
 
@@ -13,6 +12,7 @@ class Count(val expr: Expression<*>, val distinct: Boolean = false): Function<In
 
     override val columnType: ColumnType = IntegerColumnType();
 }
+/*
 
 class Date(val expr: Expression<DateTime?>): Function<DateTime>() {
     override fun toSQL(queryBuilder: QueryBuilder): String {
@@ -34,6 +34,7 @@ class Month(val expr: Expression<DateTime?>): Function<DateTime>() {
 
     override val columnType: ColumnType = DateColumnType(false);
 }
+*/
 
 class LowerCase<T: String?>(val expr: Expression<T>) : Function<T>() {
     override fun toSQL(queryBuilder: QueryBuilder): String {

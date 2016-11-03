@@ -4,7 +4,7 @@ import org.jetbrains.exposed.dao.EntityID
 import org.jetbrains.exposed.dao.IdTable
 import org.jetbrains.exposed.sql.transactions.TransactionManager
 import org.jetbrains.exposed.sql.vendors.inProperCase
-import org.joda.time.DateTime
+//import org.joda.time.DateTime
 import java.math.BigDecimal
 import java.sql.Blob
 import java.util.*
@@ -199,11 +199,11 @@ open class Table(name: String = ""): ColumnSet(), DdlAware {
 
     fun long(name: String): Column<Long> = registerColumn(name, LongColumnType())
 
-    fun date(name: String): Column<DateTime> = registerColumn(name, DateColumnType(false))
+    fun date(name: String): Column<String> = registerColumn(name, DateColumnType(false))
 
     fun bool(name: String): Column<Boolean> = registerColumn(name, BooleanColumnType())
 
-    fun datetime(name: String): Column<DateTime> = registerColumn(name, DateColumnType(true))
+    fun datetime(name: String): Column<String> = registerColumn(name, DateColumnType(true))
 
     fun blob(name: String): Column<Blob> = registerColumn(name, BlobColumnType())
 
