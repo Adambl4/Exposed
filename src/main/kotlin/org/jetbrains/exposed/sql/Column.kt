@@ -64,7 +64,7 @@ open class Column<T>(val table: Table, val name: String, override val columnType
         if (colType.nullable || (dbDefaultValue != null && defaultValueFun == null && !currentDialect.supportsExpressionsAsDefault)) {
             append(" NULL")
         } else if (!isPKColumn) {
-            //append(" NOT NULL") TODO
+            append(" NOT NULL")
         }
 
         if (!isPKColumn && dbDefaultValue != null) {

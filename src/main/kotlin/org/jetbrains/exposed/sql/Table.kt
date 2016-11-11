@@ -215,6 +215,10 @@ open class Table(name: String = ""): ColumnSet(), DdlAware {
 
     fun varchar(name: String, length: Int, collate: String? = null): Column<String> = registerColumn(name, StringColumnType(length, collate))
 
+    fun createdAt(): Column<String> = registerColumn("created_at", DateColumnType(false))
+    fun updatedAt(): Column<String> = registerColumn("updated_at", DateColumnType(false))
+    fun real(name: String): Column<String> = registerColumn(name, RealColumnType())
+
     fun <N:Number, C:Column<N>> C.autoIncrement(): C {
         columnType.autoinc = true
         return this
